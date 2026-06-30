@@ -166,9 +166,6 @@ public:
                     break;
 
                 case Divide:
-                    if (right == 0) {
-                        throw FormulaError(FormulaError::Category::Arithmetic);
-                    }
                     result = left / right;
                     break;
 
