@@ -72,7 +72,7 @@ public:
     virtual ~Expr() = default;
     virtual void Print(std::ostream& out) const = 0;
     virtual void DoPrintFormula(std::ostream& out, ExprPrecedence precedence) const = 0;
-    virtual double Evaluate(/*добавьте сюда нужные аргументы*/ args) const = 0;
+    virtual double Evaluate(const SheetInterface& sheet) const = 0;
 
     // higher is tighter
     virtual ExprPrecedence GetPrecedence() const = 0;
@@ -142,8 +142,51 @@ public:
         }
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/) const override {
-			// Скопируйте ваше решение из предыдущих уроков.
+    double Evaluate(const SheetInterface& sheet) const override {
+        try {
+            double left = lhs_->Evaluate(sheet);
+            double right = rhs_->Evaluate(sheet);
+
+            // Для проверки переполнения double и бесконенчости
+            double result = 0.0;
+
+            // Оказывается внутри проверки switch нельзя создавать переменные
+            
+            switch (type_) {
+                case Add:
+                    result = left + right;
+                    break;
+
+                case Subtract:
+                    result = left - right;
+                    break;
+
+                case Multiply:
+                    result = left * right;
+                    break;
+
+                case Divide:
+                    if (right == 0) {
+                        throw FormulaError(FormulaError::Category::Arithmetic);
+                    }
+                    result = left / right;
+                    break;
+
+                default:
+                    return 0.0;
+                }
+
+            // Проверка на переполнение, бесконечность или NaN)
+            if (std::isinf(result) || std::isnan(result)) {
+                throw FormulaError(FormulaError::Category::Arithmetic);
+            }
+
+            return result;
+        } catch (const FormulaError&) {
+            throw;
+        } catch (const std::exception&) {
+            throw FormulaError(FormulaError::Category::Arithmetic);
+        }
     }
 
 private:
@@ -180,8 +223,9 @@ public:
         return EP_UNARY;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
-        // Скопируйте ваше решение из предыдущих уроков.
+    double Evaluate(const SheetInterface& sheet) const override {
+        double val = operand_->Evaluate(sheet);
+        return (type_ == UnaryMinus) ? -val : val;
     }
 
 private:
@@ -191,15 +235,15 @@ private:
 
 class CellExpr final : public Expr {
 public:
-    explicit CellExpr(const Position* cell)
+    explicit CellExpr(const Position& cell)
         : cell_(cell) {
     }
 
     void Print(std::ostream& out) const override {
-        if (!cell_->IsValid()) {
-            out << FormulaError::Category::Ref;
+        if (!cell_.IsValid()) {
+            out << "#REF!";
         } else {
-            out << cell_->ToString();
+            out << cell_.ToString();
         }
     }
 
@@ -211,12 +255,49 @@ public:
         return EP_ATOM;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
-        // реализуйте метод.
+    double Evaluate(const SheetInterface& sheet) const override {
+        if (!cell_.IsValid()) {
+            throw FormulaError(FormulaError::Category::Ref);
+        }
+
+        const CellInterface* cell = sheet.GetCell(cell_);
+        if (!cell) {
+            return 0.0; // Пустая ячейка трактуется как 0
+        }
+
+        auto value = cell->GetValue();
+        
+        if (std::holds_alternative<double>(value)) {
+            return std::get<double>(value);
+
+        } else if (std::holds_alternative<std::string>(value)) {
+            const std::string& str = std::get<std::string>(value);
+
+            if (str.empty()) return 0.0;
+
+
+                try {
+                    size_t pos;
+                    double num = std::stod(str, &pos);
+
+                    if (pos == str.length()) {
+                        return num;
+                    }
+
+                } catch (const std::exception&) {
+                    // Не удалось преобразовать в число
+                }
+                throw FormulaError(FormulaError::Category::Value);
+
+        } else if (std::holds_alternative<FormulaError>(value)) {
+            throw std::get<FormulaError>(value);
+        }
+        
+        throw FormulaError(FormulaError::Category::Value);
     }
 
 private:
-    const Position* cell_;
+    Position cell_;
 };
 
 class NumberExpr final : public Expr {
@@ -237,7 +318,7 @@ public:
         return EP_ATOM;
     }
 
-    double Evaluate(/*добавьте нужные аргументы*/ args) const override {
+    double Evaluate(const SheetInterface& /* sheet */) const override {
         return value_;
     }
 
@@ -293,12 +374,13 @@ public:
     void exitCell(FormulaParser::CellContext* ctx) override {
         auto value_str = ctx->CELL()->getSymbol()->getText();
         auto value = Position::FromString(value_str);
+
         if (!value.IsValid()) {
             throw FormulaException("Invalid position: " + value_str);
         }
 
         cells_.push_front(value);
-        auto node = std::make_unique<CellExpr>(&cells_.front());
+        auto node = std::make_unique<CellExpr>(value);
         args_.push_back(std::move(node));
     }
 
@@ -391,8 +473,8 @@ void FormulaAST::PrintFormula(std::ostream& out) const {
     root_expr_->PrintFormula(out, ASTImpl::EP_ATOM);
 }
 
-double FormulaAST::Execute(/*добавьте нужные аргументы*/ args) const {
-    return root_expr_->Evaluate(/*добавьте нужные аргументы*/ args);
+double FormulaAST::Evaluate(const SheetInterface& sheet) const {
+    return root_expr_->Evaluate(sheet);
 }
 
 FormulaAST::FormulaAST(std::unique_ptr<ASTImpl::Expr> root_expr, std::forward_list<Position> cells)

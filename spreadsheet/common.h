@@ -7,6 +7,7 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+#include <functional>
 
 // Позиция ячейки. Индексация с нуля.
 struct Position {
@@ -26,6 +27,17 @@ struct Position {
     static const Position NONE;
 };
 
+namespace std {
+template<>
+struct hash<Position> {
+    size_t operator()(const Position& pos) const noexcept {
+        // комбинируем row и col
+        // Используем битовый сдвиг для хорошего распределения
+        return static_cast<size_t>(pos.row * 31 + pos.col);
+    }
+};
+}
+
 struct Size {
     int rows = 0;
     int cols = 0;
@@ -39,7 +51,7 @@ public:
     enum class Category {
         Ref,    // ссылка на ячейку с некорректной позицией
         Value,  // ячейка не может быть трактована как число
-        Div0,  // в результате вычисления возникло деление на ноль
+        Arithmetic,  // в результате вычисления возникло деление на ноль
     };
 
     FormulaError(Category category);
